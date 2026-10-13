@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Game of Life — Custom Rules</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#030712; color:#f1f5f9; }
+  #gol-canvas { cursor: crosshair; display:block; border: 1px solid #374151; }
+  .cb-group label { cursor:pointer; user-select:none; }
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-3">
+
+<h1 class="text-2xl font-bold text-green-400 mt-3 mb-1">Game of Life — Custom Rules</h1>
+<p class="text-gray-400 text-xs mb-3">Click/drag on canvas to draw · Cells fade with age</p>
+
+<!-- Controls row -->
+<div class="flex gap-2 flex-wrap justify-center mb-3">
+  <button id="btn-play" onclick="togglePlay()" aria-label="Play/Pause" class="px-4 py-1.5 bg-green-700 hover:bg-green-600 rounded-lg font-semibold text-sm transition">▶ Play</button>
+  <button onclick="step()" aria-label="Step one generation" class="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg font-semibold text-sm transition">Step</button>
+  <button onclick="clearGrid()" aria-label="Clear grid" class="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg font-semibold text-sm transition">Clear</button>
+  <button onclick="randomize()" aria-label="Random fill" class="px-4 py-1.5 bg-blue-700 hover:bg-blue-600 rounded-lg font-semibold text-sm transition">Random</button>
+  <div class="flex items-center gap-2">
+    <label for="speed-slider" class="text-xs text-gray-400">Speed</label>
+    <input id="speed-slider" type="range" min="1" max="30" value="10" class="w-20" oninput="updateSpeed(this.value)" aria-label="Speed">
+    <span id="speed-val" class="text-xs text-yellow-300 w-8">10</span>
+  </div>
+</div>
+
+<!-- Stats -->
+<div class="flex gap-6 text-xs text-gray-400 mb-3">
+  <span>Generation: <span id="gen-counter" class="text-green-400 font-bold">0</span></span>
+  <span>Live cells: <span id="live-counter" class="text-green-400 font-bold">0</span></span>
+</div>
+
+<!-- Canvas -->
+<canvas id="gol-canvas" width="600" height="400"></canvas>
+
+<!-- Rule panels -->
+<div class="mt-4 flex gap-4 flex-wrap justify-center max-w-2xl">
+  <!-- Birth rule -->
+  <div class="bg-gray-900 rounded-xl p-3">
+    <p class="text-xs font-semibold text-blue-400 mb-2 uppercase tracking-wide">Birth (B) — Dead cell becomes alive with N live neighbors</p>
+    <div id="birth-cbs" class="flex gap-2 flex-wrap cb-group" role="group" aria-label="Birth rule checkboxes"></div>
+  </div>
+  <!-- Survive rule -->
+  <div class="bg-gray-900 rounded-xl p-3">
+    <p class="text-xs font-semibold text-yellow-400 mb-2 uppercase tracking-wide">Survive (S) — Live cell stays alive with N live neighbors</p>
+    <div id="survive-cbs" class="flex gap-2 flex-wrap cb-group" role="group" aria-label="Survive rule checkboxes"></div>
+  </div>
+</div>
+
+<!-- Preset rules -->
+<div class="mt-3 flex gap-2 flex-wrap justify-center text-xs">
+  <span class="text-gray-500 self-center">Presets:</span>
+  <button onclick="setRule([3],[2,3],'Conway B3/S23')" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded-lg transition">Conway (B3/S23)</button>
+  <button onclick="setRule([3,6],[2,3],'HighLife B36/S23')" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded-lg transition">HighLife B36/S23</button>
+  <button onclick="setRule([3,6,8],[2,4,6],'Custom')" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded-lg transition">Maze</button>
+  <button onclick="setRule([3,5,7],[1,3,5,7],'Replicator')" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded-lg transition">Replicator</button>
+  <button onclick="setRule([2],[2,3],'Seeds-like')" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded-lg transition">Seeds</button>
+</div>
+<div id="rule-label" class="text-xs text-purple-400 mt-2 font-semibold">Conway B3/S23</div>
+
+<script>
+const COLS = 60, ROWS = 40, CELL = 10;
+const canvas = document.getElementById('gol-canvas');
+const ctx = canvas.getContext('2d');
+
+let grid = new Uint8Array(COLS * ROWS);   // 0=dead, >0=alive (age)
+let birthRule = new Set([3]);
+let surviveRule = new Set([2,3]);
+let generation = 0;
+let playing = false;
+let speed = 10;
+let rafId = null;
+let lastTime = 0;
+let drawing = false, drawValue = 1;
+let frameInterval = 1000/10;
+
+function idx(c,r) { return r * COLS + c; }
+
+function getNeighborCount(c, r) {
+  let n = 0;
+  for (let dr=-1; dr<=1; dr++) for (let dc=-1; dc<=1; dc++) {
+    if (dr===0&&dc===0) continue;
+    const nr = (r+dr+ROWS)%ROWS, nc = (c+dc+COLS)%COLS;
+    if (grid[idx(nc,nr)] > 0) n++;
+  }
+  return n;
+}
+
+function step() {
+  const next = new Uint8Array(COLS * ROWS);
+  for (let r=0; r<ROWS; r++) for (let c=0; c<COLS; c++) {
+    const alive = grid[idx(c,r)] > 0;
+    const n = getNeighborCount(c, r);
+    if (!alive && birthRule.has(n)) next[idx(c,r)] = 1;
+    else if (alive && surviveRule.has(n)) next[idx(c,r)] = Math.min(grid[idx(c,r)] + 1, 50);
+    else next[idx(c,r)] = 0;
+  }
+  grid = next;
+  generation++;
+  render();
+  updateStats();
+}
+
+function render() {
+  ctx.fillStyle = '#030712';
+  ctx.fillRect(0,0,600,400);
+  for (let r=0; r<ROWS; r++) for (let c=0; c<COLS; c++) {
+    const age = grid[idx(c,r)];
+    if (age === 0) continue;
+    // Color by age: young=bright green, old=dim teal
+    const t = Math.min((age-1)/30, 1);
+    const g = Math.round(220 - t*150);
+    const b = Math.round(50 + t*100);
+    const a = 1 - t*0.4;
+    ctx.fillStyle = `rgba(0,${g},${b},${a})`;
+    ctx.fillRect(c*CELL+1, r*CELL+1, CELL-1, CELL-1);
+  }
+  // Grid lines (subtle)
+  ctx.strokeStyle = 'rgba(55,65,81,0.3)';
+  ctx.lineWidth = 0.5;
+  for (let c=0;c<=COLS;c++) { ctx.beginPath(); ctx.moveTo(c*CELL,0); ctx.lineTo(c*CELL,400); ctx.stroke(); }
+  for (let r=0;r<=ROWS;r++) { ctx.beginPath(); ctx.moveTo(0,r*CELL); ctx.lineTo(600,r*CELL); ctx.stroke(); }
+}
+
+function updateStats() {
+  document.getElementById('gen-counter').textContent = generation;
+  let live = 0;
+  for (let i=0;i<grid.length;i++) if (grid[i]>0) live++;
+  document.getElementById('live-counter').textContent = live;
+}
+
+function loop(ts) {
+  if (!playing) return;
+  if (ts - lastTime >= frameInterval) {
+    step();
+    lastTime = ts;
+  }
+  rafId = requestAnimationFrame(loop);
+}
+
+function togglePlay() {
+  playing = !playing;
+  const btn = document.getElementById('btn-play');
+  if (playing) {
+    btn.textContent = '⏸ Pause';
+    btn.className = 'px-4 py-1.5 bg-yellow-700 hover:bg-yellow-600 rounded-lg font-semibold text-sm transition';
+    rafId = requestAnimationFrame(loop);
+  } else {
+    btn.textContent = '▶ Play';
+    btn.className = 'px-4 py-1.5 bg-green-700 hover:bg-green-600 rounded-lg font-semibold text-sm transition';
+    cancelAnimationFrame(rafId);
+  }
+}
+
+function clearGrid() {
+  grid.fill(0); generation=0; render(); updateStats();
+}
+
+function randomize() {
+  for (let i=0;i<grid.length;i++) grid[i] = Math.random()<0.3 ? 1 : 0;
+  generation=0; render(); updateStats();
+}
+
+function updateSpeed(v) {
+  speed = parseInt(v);
+  frameInterval = 1000/speed;
+  document.getElementById('speed-val').textContent = v;
+}
+
+function buildCheckboxes(containerId, ruleSet, type) {
+  const div = document.getElementById(containerId);
+  div.innerHTML = '';
+  for (let n=0;n<=8;n++) {
+    const id = `${type}-${n}`;
+    const label = document.createElement('label');
+    label.className = 'flex flex-col items-center gap-1 cursor-pointer';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = id;
+    cb.checked = ruleSet.has(n);
+    cb.className = 'w-4 h-4 accent-green-500';
+    cb.setAttribute('aria-label', `${type === 'birth' ? 'Birth' : 'Survive'} with ${n} neighbors`);
+    cb.onchange = () => {
+      if (type==='birth') { if(cb.checked) birthRule.add(n); else birthRule.delete(n); }
+      else { if(cb.checked) surviveRule.add(n); else surviveRule.delete(n); }
+      updateRuleLabel();
+    };
+    const span = document.createElement('span');
+    span.className = 'text-xs text-gray-400';
+    span.textContent = String(n);
+    label.appendChild(cb);
+    label.appendChild(span);
+    div.appendChild(label);
+  }
+}
+
+function setRule(birth, survive, name) {
+  birthRule = new Set(birth);
+  surviveRule = new Set(survive);
+  buildCheckboxes('birth-cbs', birthRule, 'birth');
+  buildCheckboxes('survive-cbs', surviveRule, 'survive');
+  document.getElementById('rule-label').textContent = name;
+}
+
+function updateRuleLabel() {
+  const b = [...birthRule].sort((a,b)=>a-b).join('');
+  const s = [...surviveRule].sort((a,b)=>a-b).join('');
+  document.getElementById('rule-label').textContent = `B${b}/S${s}`;
+}
+
+// Canvas drawing
+function cellAt(x, y) {
+  return [Math.floor(x/CELL), Math.floor(y/CELL)];
+}
+canvas.addEventListener('mousedown', e => {
+  drawing = true;
+  const rect = canvas.getBoundingClientRect();
+  const [c,r] = cellAt(e.clientX-rect.left, e.clientY-rect.top);
+  if (c>=0&&c<COLS&&r>=0&&r<ROWS) {
+    drawValue = grid[idx(c,r)] > 0 ? 0 : 1;
+    grid[idx(c,r)] = drawValue;
+    render(); updateStats();
+  }
+});
+canvas.addEventListener('mousemove', e => {
+  if (!drawing) return;
+  const rect = canvas.getBoundingClientRect();
+  const [c,r] = cellAt(e.clientX-rect.left, e.clientY-rect.top);
+  if (c>=0&&c<COLS&&r>=0&&r<ROWS) {
+    grid[idx(c,r)] = drawValue;
+    render(); updateStats();
+  }
+});
+document.addEventListener('mouseup', () => drawing=false);
+
+// Init
+setRule([3],[2,3],'Conway B3/S23');
+randomize();
+</script>
+</body>
+</html>
